@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <style>
 :root{
   --bg:#FFD23F; --ink:#1B1F5E; --paper:#FFFFFF; --tomato:#FF5A5F; --mint:#2EC4B6; --soft:#FFF4C2;
@@ -246,17 +247,50 @@ const sndOk = () => tone([660, 880, 1320]);
 const sndNo = () => tone([200, 150], "square", .14);
 const sndTick = () => tone([520], "triangle", .08);
 
-// ---------- Red (BroadcastChannel entre pestañas; luego se cambia por Supabase Realtime) ----------
+// ---------- Red (PeerJS: el anfitrión se conecta directo con cada invitado) ----------
+const PREFIX = "ojochat-sala-";
 const me = { id: rid(8), name: "" };
-let ch = null;
-function openRoom(code) {
-  ch = new BroadcastChannel("ojochat-" + code);
-  ch.onmessage = e => handle(e.data);
+let peer = null, hostConn = null;
+const conns = new Map();   // solo anfitrión: conexión → id del jugador
+
+function hostRoom(onReady, onFail, tries = 0) {
+  S.room = rid(4);
+  peer = new Peer(PREFIX + S.room, { debug: 0 });
+  peer.on("open", onReady);
+  peer.on("disconnected", () => { if (!peer.destroyed) peer.reconnect(); });
+  peer.on("connection", c => {
+    conns.set(c, null);
+    c.on("data", m => { if (!m || !m.t) return; if (m.t === "join") conns.set(c, m.from); handle(m); });
+    c.on("close", () => { const id = conns.get(c); conns.delete(c); if (id) handle({ t: "leave", from: id }); });
+  });
+  peer.on("error", e => {
+    if (peer.open) return;
+    peer.destroy();
+    if (e.type === "unavailable-id" && tries < 3) return hostRoom(onReady, onFail, tries + 1);
+    onFail(e);
+  });
+}
+function joinRoom(code, onFail) {
+  peer = new Peer({ debug: 0 });
+  peer.on("open", () => {
+    hostConn = peer.connect(PREFIX + code, { reliable: true, serialization: "json" });
+    hostConn.on("open", () => send("join", { name: me.name, token: S.joinToken }));
+    hostConn.on("data", m => { if (m && m.t) handle(m); });
+    hostConn.on("close", hostLost);
+  });
+  peer.on("error", e => { peer.destroy(); peer = hostConn = null; onFail(e); });
+}
+function hostLost() {
+  if (S.over) return;
+  S.over = true;
+  cancelAnimationFrame(raf);
+  message("Se perdió la conexión", "Quien creó la sala cerró la página o se le cortó el internet.");
 }
 function send(t, data = {}) {
   const m = { t, from: me.id, ...data };
-  ch.postMessage(m);
-  handle(m);   // BroadcastChannel no se entrega a sí mismo
+  if (S.host) conns.forEach((id, c) => { if (c.open) c.send(m); });
+  else if (hostConn && hostConn.open) hostConn.send(m);
+  handle(m);   // el mensaje también se procesa en este mismo navegador
 }
 
 // ---------- Estado ----------
@@ -284,16 +318,22 @@ document.querySelectorAll(".stepper").forEach(st => {
 $("#create").onclick = () => {
   const name = $("#host-name").value.trim();
   if (!name) { $("#home-err").textContent = "Escribe tu nombre para crear la sala."; return; }
-  me.name = name; S.host = true; S.room = rid(4);
-  openRoom(S.room);
-  S.players = [{ id: me.id, name }];
-  newLink();
-  broadcastLobby();
-  history.replaceState(null, "", location.pathname + location.search);
+  me.name = name; S.host = true;
+  const btn = $("#create");
+  btn.disabled = true; btn.textContent = "Creando sala…"; $("#home-err").textContent = "";
+  hostRoom(() => {
+    S.players = [{ id: me.id, name }];
+    newLink();
+    broadcastLobby();
+    history.replaceState(null, "", location.pathname + location.search);
+  }, () => {
+    S.host = false; btn.disabled = false; btn.textContent = "Crear sala";
+    $("#home-err").textContent = "No pudimos crear la sala. Revisa tu internet e intenta de nuevo.";
+  });
 };
 function newLink() {
   S.token = rid(6); S.exp = Date.now() + LINK_TTL;
-  const url = location.href.split("#")[0] + "#sala=" + S.room + "&t=" + S.token + "&vence=" + S.exp;
+  const url = location.href.split("#")[0] + "#sala=" + S.room + "&t=" + S.token;
   $("#invite-link").textContent = url;
   S.link = url;
 }
@@ -328,10 +368,6 @@ function readInvite() {
   const h = new URLSearchParams(location.hash.slice(1));
   const sala = h.get("sala");
   if (!sala) return false;
-  if (Date.now() > +h.get("vence")) {
-    message("Este enlace ya venció", "Los enlaces de invitación duran 10 minutos. Pide uno nuevo a quien creó la sala.");
-    return true;
-  }
   S.room = sala; S.joinToken = h.get("t");
   $("#join-code").textContent = sala;
   show("s-join");
@@ -342,19 +378,22 @@ $("#join").onclick = () => {
   const name = $("#join-name").value.trim();
   if (!name) { $("#join-err").textContent = "Escribe tu nombre para entrar."; return; }
   me.name = name;
-  if (!ch) openRoom(S.room);
-  $("#join").disabled = true; $("#join-err").textContent = "";
-  send("join", { name, token: S.joinToken });
-  joinTimer = setTimeout(() => {
-    $("#join").disabled = false;
-    $("#join-err").textContent = "No encontramos la sala. Revisa que la pestaña del anfitrión siga abierta.";
-  }, 3000);
+  $("#join").disabled = true; $("#join-err").textContent = "Conectando…";
+  const fail = text => {
+    clearTimeout(joinTimer);
+    if (peer) { peer.destroy(); peer = hostConn = null; }
+    $("#join").disabled = false; $("#join-err").textContent = text;
+  };
+  joinRoom(S.room, e => fail(e.type === "peer-unavailable"
+    ? "No encontramos la sala. Revisa que quien la creó siga con la página abierta."
+    : "No pudimos conectarnos. Revisa tu internet e intenta de nuevo."));
+  joinTimer = setTimeout(() => fail("La sala no responde. Intenta de nuevo en un momento."), 15000);
 };
 
 function message(title, text) { $("#msg-title").textContent = title; $("#msg-text").textContent = text; show("s-msg"); }
 $("#msg-home").onclick = $("#final-home").onclick = () => { location.href = location.href.split("#")[0]; };
 
-window.addEventListener("pagehide", () => { if (ch && S.room) try { ch.postMessage({ t: "leave", from: me.id }); } catch (e) {} });
+window.addEventListener("pagehide", () => { if (peer) peer.destroy(); });
 
 // ---------- Manejador de mensajes ----------
 function handle(m) {
@@ -369,17 +408,21 @@ function handle(m) {
       return broadcastLobby();
     }
     case "leave": {
-      if (!S.host || S.started) return;
+      if (!S.host) return;
       S.players = S.players.filter(p => p.id !== m.from);
-      return broadcastLobby();
+      if (!S.started) return broadcastLobby();
+      // Si alguien se va a mitad de ronda, no lo esperamos
+      if (S.cur && !S.ended && S.players.every(p => S.answers[p.id])) endRound();
+      return;
     }
     case "reject":
       if (m.to !== me.id) return;
       clearTimeout(joinTimer);
+      S.over = true;
       return message("No pudiste entrar", m.reason);
     case "lobby": {
       if (!m.players.some(p => p.id === me.id)) return;
-      clearTimeout(joinTimer);
+      clearTimeout(joinTimer); $("#join-err").textContent = "";
       S.players = m.players; S.cfg = m.cfg; S.room = m.room;
       return renderLobby();
     }
@@ -387,7 +430,7 @@ function handle(m) {
     case "answer": {
       if (!S.host || !S.cur || m.round !== S.n || S.ended) return;
       S.answers[m.from] = { word: m.word, ms: m.ms };
-      if (Object.keys(S.answers).length >= S.players.length) endRound();
+      if (S.players.every(p => S.answers[p.id])) endRound();
       return;
     }
     case "roundEnd": return showResults(m);
@@ -427,10 +470,9 @@ function pickPair() {
 }
 function nextRound() {
   S.n++; S.answers = {}; S.ended = false;
-  const startAt = Date.now() + PRE;
-  send("round", { n: S.n, total: S.cfg.rounds, letters: pickPair(), startAt, dur: DUR });
+  send("round", { n: S.n, total: S.cfg.rounds, letters: pickPair(), pre: PRE, dur: DUR });
   clearTimeout(S.roundTimer);
-  S.roundTimer = setTimeout(endRound, PRE + DUR + 800);
+  S.roundTimer = setTimeout(endRound, PRE + DUR + 2000);
 }
 function endRound() {
   if (S.ended) return; S.ended = true;
@@ -463,7 +505,8 @@ function finish() {
 // ---------- Todos: jugar una ronda ----------
 let raf;
 function startRound(m) {
-  S.cur = { ...m, answered: false, active: false };
+  const start = Date.now() + m.pre;   // cada dispositivo cuenta con su propio reloj
+  S.cur = { ...m, startAt: start, answered: false, active: false };
   $("#l1").textContent = m.letters[0]; $("#l2").textContent = m.letters[1];
   $("#play-round").textContent = `Ronda ${m.n} de ${m.total}`;
   $("#play-score").textContent = `${S.myScore} pts`;
@@ -477,13 +520,13 @@ function startRound(m) {
   cancelAnimationFrame(raf);
   const loop = () => {
     const now = Date.now();
-    if (now < m.startAt) {
-      const n = Math.ceil((m.startAt - now) / 1000);
+    if (now < start) {
+      const n = Math.ceil((start - now) / 1000);
       if (n !== lastShown) { cd.textContent = n; lastShown = n; sndTick(); }
       setLids(0); $("#clock").textContent = "10";
     } else {
       if (!cd.hidden) { cd.hidden = true; S.cur.active = true; setInput(!S.cur.answered); }
-      const el = now - m.startAt, left = Math.max(0, m.dur - el);
+      const el = now - start, left = Math.max(0, m.dur - el);
       setLids(Math.min(1, el / m.dur));
       const c = $("#clock"); c.textContent = Math.ceil(left / 1000); c.classList.toggle("late", left < 3000);
       if (left <= 0) {
@@ -568,6 +611,7 @@ function showResults(m) {
 
 // ---------- Final y premios ----------
 function showFinal(m) {
+  S.over = true;
   $("#final-board").innerHTML = m.ranking.map((r, i) => `
     <li><span class="pos">${i + 1}</span><span class="who"><strong>${esc(r.name)}${r.id === me.id ? " (tú)" : ""}</strong></span><span class="pts">${r.total}</span></li>`).join("");
   $("#awards").innerHTML =

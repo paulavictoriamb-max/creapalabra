@@ -16,4 +16,6 @@ Al final se muestran las posiciones y los premios al **más rápido** y a la **p
 
 - Todo el juego está en un solo archivo: `index.html` (HTML, CSS y JavaScript sin dependencias).
 - Incluye un diccionario de español de unas 365 mil palabras, comprimido con gzip dentro de la página.
-- El multijugador usa `BroadcastChannel`, así que por ahora solo funciona entre pestañas del mismo navegador. El siguiente paso es cambiarlo por Supabase Realtime para jugar desde distintos dispositivos.
+- El multijugador usa [PeerJS](https://peerjs.com): quien crea la sala queda como anfitrión y cada invitado se conecta directo con su navegador, desde cualquier lugar. No hace falta servidor propio ni cuenta.
+- El anfitrión debe mantener la página abierta durante toda la partida; si la cierra, la sala termina.
+- Para que funcione el enlace de invitación, el juego debe estar publicado en la web (por ejemplo, con GitHub Pages).
