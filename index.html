@@ -54,6 +54,8 @@ input:focus-visible,button:focus-visible{outline:3px dashed var(--tomato);outlin
 /* Lobby */
 .code{font-size:2.4rem;font-weight:800;letter-spacing:.12em}
 .link{word-break:break-all;font-size:.9rem;background:var(--soft);border-radius:10px;padding:8px 10px;margin-top:8px}
+.net{font-weight:700;margin:4px 0}
+.net.off{color:var(--tomato)}
 .players{list-style:none;padding:0;margin:8px 0 0;display:flex;flex-wrap:wrap;gap:8px}
 .players li{background:var(--soft);border:2px solid var(--ink);border-radius:999px;padding:4px 14px;font-weight:700}
 .players li.me{background:var(--mint)}
@@ -145,6 +147,7 @@ main:has(> #s-play:not([hidden])){padding-left:6px;padding-right:6px}
     <div class="code" id="lobby-code"></div>
     <p id="lobby-cfg" class="muted"></p>
     <div id="invite" hidden>
+      <p class="net" id="net"></p>
       <p><strong id="exp-text"></strong></p>
       <div class="link" id="invite-link"></div>
       <div class="row">
@@ -256,30 +259,53 @@ const conns = new Map();   // solo anfitrión: conexión → id del jugador
 
 function hostRoom(onReady, onFail, tries = 0) {
   S.room = rid(4);
+  let ready = false;
   peer = new Peer(PREFIX + S.room, { debug: 0 });
-  peer.on("open", onReady);
-  peer.on("disconnected", () => { if (!peer.destroyed) peer.reconnect(); });
+  peer.on("open", () => { setNet(true); if (!ready) { ready = true; onReady(); } });
+  peer.on("disconnected", () => setNet(false));
   peer.on("connection", c => {
     conns.set(c, null);
     c.on("data", m => { if (!m || !m.t) return; if (m.t === "join") conns.set(c, m.from); handle(m); });
     c.on("close", () => { const id = conns.get(c); conns.delete(c); if (id) handle({ t: "leave", from: id }); });
   });
   peer.on("error", e => {
+    if (ready) return;   // ya hay sala: el vigilante de abajo la reconecta
     if (peer.open) return;
     peer.destroy();
     if (e.type === "unavailable-id" && tries < 3) return hostRoom(onReady, onFail, tries + 1);
     onFail(e);
   });
 }
+// Si el teléfono pausa la página (por ejemplo, al ir a WhatsApp a mandar el enlace),
+// se cae la conexión con el servidor y nadie más puede entrar. Los jugadores que ya
+// estaban siguen conectados; solo hay que volver a registrar la sala con el mismo código.
+function reviveRoom() {
+  if (S.host && peer && !peer.destroyed && peer.disconnected) peer.reconnect();
+}
+setInterval(reviveRoom, 4000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) reviveRoom(); });
+function setNet(ok) {
+  const el = $("#net"); if (!el) return;
+  el.textContent = ok ? "● Sala abierta: ya pueden entrar" : "● Reconectando la sala…";
+  el.classList.toggle("off", !ok);
+}
+
 function joinRoom(code, onFail) {
+  let tries = 0;
   peer = new Peer({ debug: 0 });
-  peer.on("open", () => {
+  const connect = () => {
     hostConn = peer.connect(PREFIX + code, { reliable: true, serialization: "json" });
     hostConn.on("open", () => send("join", { name: me.name, token: S.joinToken }));
     hostConn.on("data", m => { if (m && m.t) handle(m); });
-    hostConn.on("close", hostLost);
+    hostConn.on("close", () => { if (S.joined) hostLost(); });
+  };
+  peer.on("open", connect);
+  peer.on("error", e => {
+    // Puede que el anfitrión se esté reconectando: reintentamos unas veces antes de rendirnos
+    if (e.type === "peer-unavailable" && ++tries < 6) return setTimeout(() => { if (peer && !peer.destroyed) connect(); }, 2500);
+    if (peer) peer.destroy();
+    peer = hostConn = null; onFail(e);
   });
-  peer.on("error", e => { peer.destroy(); peer = hostConn = null; onFail(e); });
 }
 function hostLost() {
   if (S.over) return;
@@ -388,7 +414,7 @@ $("#join").onclick = () => {
   joinRoom(S.room, e => fail(e.type === "peer-unavailable"
     ? "No encontramos la sala. Revisa que quien la creó siga con la página abierta."
     : "No pudimos conectarnos. Revisa tu internet e intenta de nuevo."));
-  joinTimer = setTimeout(() => fail("La sala no responde. Intenta de nuevo en un momento."), 15000);
+  joinTimer = setTimeout(() => fail("La sala no responde. Intenta de nuevo en un momento."), 25000);
 };
 
 function message(title, text) { $("#msg-title").textContent = title; $("#msg-text").textContent = text; show("s-msg"); }
@@ -426,7 +452,7 @@ function handle(m) {
     case "lobby": {
       if (!m.players.some(p => p.id === me.id)) return;
       clearTimeout(joinTimer); $("#join-err").textContent = "";
-      S.players = m.players; S.cfg = m.cfg; S.room = m.room;
+      S.players = m.players; S.cfg = m.cfg; S.room = m.room; S.joined = true;
       return renderLobby();
     }
     case "round": return startRound(m);
