@@ -71,13 +71,14 @@ input:focus-visible,button:focus-visible{outline:3px dashed var(--tomato);outlin
 #s-play .eye b{font-size:clamp(2.6rem,min(14vw,10vh),5.5rem)}
 #s-play .clock{font-size:2.4rem;margin-top:4px}
 #s-play .hint{margin:2px 0 0;font-size:1rem}
-#play-form{padding:12px 6px;margin-top:10px}
+main:has(> #s-play:not([hidden])){padding-left:6px;padding-right:6px}
+#play-form{background:none;border:0;box-shadow:none;border-radius:0;padding:0;margin-top:10px}
 #play-form .btn{margin-top:8px}
-.kb{display:grid;gap:6px;margin-top:4px;user-select:none;-webkit-user-select:none;touch-action:manipulation}
+.kb{display:grid;gap:6px;margin-top:6px;user-select:none;-webkit-user-select:none;touch-action:manipulation}
 .kb .kr{display:grid;grid-template-columns:repeat(10,1fr);gap:4px}
-.kb button{font:inherit;font-weight:800;font-size:clamp(1.5rem,7vw,2.1rem);line-height:1;height:clamp(52px,7.5vh,64px);padding:0;border:2px solid var(--ink);border-radius:8px;background:var(--soft);color:var(--ink);cursor:pointer}
-.kb button:active{background:var(--mint)}
-.kb button.wide{grid-column:span 3;font-size:clamp(1.1rem,4.6vw,1.4rem)}
+.kb button{font:inherit;font-weight:800;font-size:clamp(1.7rem,8vw,2.4rem);line-height:1;height:clamp(56px,9vh,76px);padding:0;border:0;border-radius:8px;background:var(--paper);color:var(--ink);box-shadow:0 3px 0 color-mix(in srgb,var(--ink) 30%,transparent);cursor:pointer}
+.kb button:active{background:var(--mint);transform:translateY(2px);box-shadow:0 1px 0 color-mix(in srgb,var(--ink) 30%,transparent)}
+.kb button.wide{grid-column:span 3;font-size:clamp(1.2rem,5vw,1.5rem)}
 .kb button:disabled{opacity:.4}
 .sent{text-align:center;font-size:1.4rem;font-weight:800}
 .overlay{position:fixed;inset:0;display:grid;place-items:center;background:color-mix(in srgb,var(--bg) 88%,transparent);font-size:8rem;font-weight:800;z-index:5}
