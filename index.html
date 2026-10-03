@@ -345,7 +345,7 @@ document.querySelectorAll(".stepper").forEach(st => {
 $("#create").onclick = () => {
   const name = $("#host-name").value.trim();
   if (!name) { $("#home-err").textContent = "Escribe tu nombre para crear la sala."; return; }
-  me.name = name; S.host = true;
+  me.name = name; S.host = true; saveName(name);
   const btn = $("#create");
   btn.disabled = true; btn.textContent = "Creando sala…"; $("#home-err").textContent = "";
   hostRoom(() => {
@@ -404,7 +404,7 @@ let joinTimer;
 $("#join").onclick = () => {
   const name = $("#join-name").value.trim();
   if (!name) { $("#join-err").textContent = "Escribe tu nombre para entrar."; return; }
-  me.name = name;
+  me.name = name; saveName(name);
   $("#join").disabled = true; $("#join-err").textContent = "Conectando…";
   const fail = text => {
     clearTimeout(joinTimer);
@@ -649,6 +649,10 @@ function showFinal(m) {
   if (m.ranking[0] && m.ranking[0].id === me.id) sndOk();
   show("s-final");
 }
+
+// ---------- Recordar el nombre en este dispositivo ----------
+function saveName(n) { try { localStorage.setItem("ojochat-nombre", n); } catch (e) {} }
+try { const n = localStorage.getItem("ojochat-nombre"); if (n) $("#host-name").value = $("#join-name").value = n; } catch (e) {}
 
 // ---------- Arranque ----------
 if (!readInvite()) show("s-home");
